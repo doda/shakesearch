@@ -13,10 +13,14 @@ const Controller = {
   updateTable: (results) => {
     const table = document.getElementById("table-body");
     const rows = [];
+    console.log(results);
     for (let result of results) {
-      rows.push(`<tr>${result}<tr/>`);
+      rows.push(`<tr><h4>${result.title}</h4></tr>`);
+      for (let line of result.lines) {
+        rows.push(`<tr>${line}</tr>`);
+      } 
     }
-    table.innerHTML = rows;
+    table.innerHTML = rows.join("");
   },
 };
 

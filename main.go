@@ -1,15 +1,35 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"index/suffixarray"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 )
+
+type JSONResult struct {
+	Title string   `json:"title"`
+	Lines []string `json:"lines"`
+}
+
+type Document struct {
+	Title string
+	Lines []string
+}
+
+type Occurrence struct {
+	Doc    *Document
+	Token  string
+	Lineno int
+}
+
+type Searcher struct {
+	Documents []*Document
+	Index     map[string][]*Occurrence
+}
 
 func main() {
 	searcher := Searcher{}
@@ -17,6 +37,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	searcher.BuildIndex()
 
 	fs := http.FileServer(http.Dir("./static"))
 	http.Handle("/", fs)
@@ -35,11 +56,6 @@ func main() {
 	}
 }
 
-type Searcher struct {
-	CompleteWorks string
-	SuffixArray   *suffixarray.Index
-}
-
 func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query, ok := r.URL.Query()["q"]
@@ -49,16 +65,14 @@ func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request
 			return
 		}
 		results := searcher.Search(query[0])
-		buf := &bytes.Buffer{}
-		enc := json.NewEncoder(buf)
-		err := enc.Encode(results)
+		byt, err := json.Marshal(results)
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte("encoding failure"))
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buf.Bytes())
+		w.Write(byt)
 	}
 }
 
@@ -67,16 +81,77 @@ func (s *Searcher) Load(filename string) error {
 	if err != nil {
 		return fmt.Errorf("Load: %w", err)
 	}
-	s.CompleteWorks = string(dat)
-	s.SuffixArray = suffixarray.New(dat)
+
+	// Dummy value that does not land in the result
+	curDoc := &Document{}
+
+	for _, line := range strings.Split(string(dat), "\r\n") {
+		// Ignore extra non-content bit at the end
+		if line == "* END CONTENT NOTE *" {
+			break
+		}
+		// Assuming that every work starts with a single line containing only it's title
+		if isTitle := workTitles[line]; isTitle {
+			// Create a new document
+			curDoc = &Document{
+				line,
+				[]string{},
+			}
+			s.Documents = append(s.Documents, curDoc)
+		}
+		curDoc.Lines = append(curDoc.Lines, line)
+	}
 	return nil
 }
 
-func (s *Searcher) Search(query string) []string {
-	idxs := s.SuffixArray.Lookup([]byte(query), -1)
-	results := []string{}
-	for _, idx := range idxs {
-		results = append(results, s.CompleteWorks[idx-250:idx+250])
+func (s *Searcher) BuildIndex() {
+	s.Index = make(map[string][]*Occurrence)
+	// Apologies for this somewhat wildly nested monstrosity
+	// This walks through every document, figures out which tokens
+	// it contains and adds it to the inverse index once.
+	for _, doc := range s.Documents {
+		for lineno, line := range doc.Lines {
+			for _, token := range extractTokens(line) {
+				occurences, ok := s.Index[token]
+				// Ignore any token occurrences for a given document past the first one
+				if ok && occurences[len(occurences)-1].Doc.Title == doc.Title {
+					continue
+				}
+				s.Index[token] = append(occurences, &Occurrence{doc, token, lineno})
+			}
+		}
 	}
+}
+
+func (s *Searcher) Search(query string) []JSONResult {
+	// Figure out which tokens occur in which documents
+	// and create a mapping of document:[query tokens that appear in it]
+	docOccurrences := make(map[string][]*Occurrence)
+	queryTokens := extractTokens(query)
+
+	for _, token := range queryTokens {
+		for _, occ := range s.Index[token] {
+			docOccurrences[occ.Doc.Title] = append(docOccurrences[occ.Doc.Title], occ)
+		}
+	}
+
+	// Only show documents that contain all tokens
+	for k, v := range docOccurrences {
+		if len(v) != len(queryTokens) {
+			delete(docOccurrences, k)
+		}
+	}
+
+	results := []JSONResult{}
+	for docTitle, occurences := range docOccurrences {
+		result := JSONResult{docTitle, []string{}}
+		for _, occ := range occurences {
+			matchingLine := occ.Doc.Lines[occ.Lineno]
+			matchingLine = formatLine(matchingLine, occ.Token, occ.Lineno)
+			result.Lines = append(result.Lines, matchingLine)
+		}
+		results = append(results, result)
+	}
+
 	return results
 }
