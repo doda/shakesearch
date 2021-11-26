@@ -1,5 +1,17 @@
 package main
 
+/*
+A few notes on my implementation:
+* I time-boxed myself to 2 hours.
+* No tests were written to try and get the end user experience as well functioning as possible.
+* The code is not written in a particularly extensible way. Some special-case logic was implemented such as
+  hard-coded document titles (in constants.go) to partitition the works.
+* I initially planned to have another endpoint /read/{document_title}#line_number, which would be hyper-linked from the results
+  but wasn't able to implement it in time.
+* A few not-so-niceties remain such as not explaining why the query "for" results in nothing (it's filtered as a stop word)
+* Snippet generation is imperfect (filtering duplicates, combining)
+*/
+
 import (
 	"encoding/json"
 	"fmt"
